@@ -1,0 +1,28 @@
+name: Keep Render Alive
+
+on:
+  # 每 10 分钟触发一次(0,10,20,30,40,50 分)
+  schedule:
+    - cron: '*/10 * * * *'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Render health endpoint
+        run: |
+          # 多次 ping 确保 15 分钟内不会因超时而休眠
+          URL="https://lightning-warehouse.onrender.com"
+          echo "Pinging $URL/health ..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL/health")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "OK: server alive (HTTP $HTTP_CODE)"
+            exit 0
+          else
+            echo "WARN: server returned HTTP $HTTP_CODE"
+            # 不让 workflow 失败(可能是冷启动慢)
+            exit 0
+          fi

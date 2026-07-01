@@ -47,6 +47,7 @@ except ImportError as e:
 
 # ============== Flask 应用 ==============
 app = Flask(__name__)
+_APP_START_TIME = time.time()
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB 上限
 
 # 任务存储（用文件存储，以适配 gunicorn 多 worker 场景）
@@ -246,7 +247,18 @@ def index():
 
 @app.route('/health')
 def health():
-    return jsonify(status='ok', version='1.0')
+    return jsonify(
+        status='ok',
+        version='1.0',
+        uptime=time.time() - _APP_START_TIME,
+        timestamp=time.time(),
+    )
+
+# 极轻量 ping 端点 — 供 cron-job.org 保持 Render 实例唤醒
+# 返回纯文本 "pong",状态码 200,耗时 < 5ms
+@app.route('/ping')
+def ping():
+    return 'pong', 200, {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'}
 
 RESULT_HTML = u"""<!DOCTYPE html>
 <html lang="zh-CN">
