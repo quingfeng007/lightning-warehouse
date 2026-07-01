@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: lightning-warehouse
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 2 --timeout 300 app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+    # 注意：免费实例 15 分钟无访问会休眠，再次访问时冷启动需 30-60 秒
