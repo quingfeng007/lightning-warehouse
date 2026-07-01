@@ -11,6 +11,8 @@ import uuid
 import shutil
 import tempfile
 import logging
+import time
+import json
 import pandas as pd
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill
@@ -47,8 +49,51 @@ except ImportError as e:
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB 上限
 
-# 任务存储（生产环境请用 Redis 或 DB）
-TASKS = {}  # task_id -> {status, files, output}
+# 任务存储（用文件存储，以适配 gunicorn 多 worker 场景）
+TASK_DIR = os.path.join(tempfile.gettempdir(), 'lightning_tasks')
+os.makedirs(TASK_DIR, exist_ok=True)
+
+
+def _task_path(task_id):
+    return os.path.join(TASK_DIR, f'{task_id}.json')
+
+
+def task_set(task_id, **kwargs):
+    """更新任务状态，写入文件"""
+    p = _task_path(task_id)
+    data = {}
+    if os.path.exists(p):
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data.update(kwargs)
+    data['updated_at'] = time.time()
+    # output 是文件路径，不能 json 化，单独存
+    output = data.pop('_output', None)
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    if output:
+        with open(p + '.output', 'w', encoding='utf-8') as f:
+            f.write(output)
+
+
+def task_get(task_id):
+    """读取任务状态"""
+    p = _task_path(task_id)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        out_p = p + '.output'
+        if os.path.exists(out_p):
+            with open(out_p, 'r', encoding='utf-8') as out_f:
+                data['output'] = out_f.read()
+        return data
+    except Exception:
+        return None
 
 # ============== HTML 模板 ==============
 INDEX_HTML = """
@@ -253,12 +298,7 @@ def process():
         request.files['file4'].save(file4_path)
 
     # 初始化任务
-    TASKS[task_id] = {
-        'status': 'running',
-        'log': '',
-        'output': None,
-        'work_dir': work_dir,
-    }
+    task_set(task_id, status='running', log='', work_dir=work_dir)
 
     # 在后台线程处理
     import threading
@@ -267,7 +307,7 @@ def process():
             log_lines = []
             def log(msg):
                 log_lines.append(msg)
-                TASKS[task_id]['log'] = '\n'.join(log_lines)
+                task_set(task_id, log='\n'.join(log_lines))
 
             log(f'[1/4] 处理文件2: 全店数据-门店成交明细')
             tmp2 = os.path.join(work_dir, '_pivot_file2.xlsx')
@@ -302,14 +342,13 @@ def process():
                           file3_vlookup_path=tmp3,
                           file4_vlookup_path=tmp4)
 
-            log(f'✅ 处理完成: {output_path}')
-            TASKS[task_id]['status'] = 'done'
-            TASKS[task_id]['output'] = output_path
+            log(f'Done: {output_path}')
+            task_set(task_id, status='done', _output=output_path)
         except Exception as e:
             import traceback
-            TASKS[task_id]['status'] = 'error'
-            TASKS[task_id]['error'] = str(e) + '\n' + traceback.format_exc()
-            TASKS[task_id]['log'] += '\n\n❌ 错误:\n' + str(e)
+            err_msg = str(e) + '\n' + traceback.format_exc()
+            log_lines.append(f'\nERROR: {err_msg}')
+            task_set(task_id, status='error', error=err_msg, log='\n'.join(log_lines))
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -317,17 +356,20 @@ def process():
 
 @app.route('/status/<task_id>')
 def status(task_id):
-    t = TASKS.get(task_id)
+    t = task_get(task_id)
     if not t:
         return jsonify(error='任务不存在'), 404
-    return jsonify(status=t['status'], log=t.get('log', ''), error=t.get('error'))
+    return jsonify(status=t.get('status', 'running'), log=t.get('log', ''), error=t.get('error'))
 
 @app.route('/download/<task_id>')
 def download(task_id):
-    t = TASKS.get(task_id)
-    if not t or t['status'] != 'done':
+    t = task_get(task_id)
+    if not t or t.get('status') != 'done':
         return jsonify(error='任务未完成'), 400
-    return send_file(t['output'], as_attachment=True, download_name='闪电仓计算结果.xlsx')
+    out = t.get('output')
+    if not out or not os.path.exists(out):
+        return jsonify(error='结果文件丢失'), 404
+    return send_file(out, as_attachment=True, download_name='result.xlsx')
 
 # ============== 启动 ==============
 if __name__ == '__main__':
