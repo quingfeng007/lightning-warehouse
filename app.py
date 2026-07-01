@@ -96,160 +96,144 @@ def task_get(task_id):
         return None
 
 # ============== HTML 模板 ==============
-INDEX_HTML = """
-<!DOCTYPE html>
+INDEX_HTML = u"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>Lightning Warehouse Calculator - Web</title>
-    <style>
-        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
-        h1 { color: #2c3e50; }
-        .file-row { display: flex; align-items: center; margin: 12px 0; }
-        .file-row label { width: 200px; font-weight: bold; }
-        .file-row input[type=file] { flex: 1; }
-        .file-row .status { width: 220px; color: #888; margin-left: 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: none; }
-        .config { background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 20px 0; }
-        .config input { width: 100px; padding: 6px; }
-        button { background: #3498db; color: white; border: none; padding: 12px 32px; font-size: 16px; border-radius: 6px; cursor: pointer; }
-        button:hover { background: #2980b9; }
-        button:disabled { background: #95a5a6; cursor: not-allowed; }
-        #log { background: #2c3e50; color: #ecf0f1; padding: 16px; border-radius: 6px; font-family: monospace; min-height: 200px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 13px; }
-        .required { color: #e74c3c; }
-        .optional { color: #95a5a6; font-size: 12px; }
-    </style>
+<meta charset="UTF-8">
+<title>闪电仓计算工具</title>
+<style>
+body{font-family:-apple-system,"Microsoft YaHei",sans-serif;max-width:760px;margin:30px auto;padding:0 20px;background:#f9f9f9;}
+h1{color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:10px;}
+.box{background:white;padding:20px;border-radius:8px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+.row{display:flex;align-items:center;margin:10px 0;gap:10px;}
+.row label{width:220px;font-weight:bold;color:#333;}
+.row input[type=file]{flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;}
+.row .name{width:240px;color:#27ae60;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cfg label{margin-right:24px;}
+.cfg input{padding:6px 10px;border:1px solid #ddd;border-radius:4px;width:80px;}
+button{background:#3498db;color:white;border:none;padding:12px 36px;font-size:16px;border-radius:6px;cursor:pointer;margin-top:10px;}
+button:hover{background:#2980b9;}
+button:disabled{background:#95a5a6;cursor:not-allowed;}
+#log{background:#2c3e50;color:#ecf0f1;padding:16px;border-radius:6px;font-family:Menlo,Consolas,monospace;min-height:180px;max-height:400px;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;}
+.req{color:#e74c3c;font-weight:bold;}
+.opt{color:#95a5a6;font-size:12px;}
+#result{display:none;margin-top:16px;padding:16px;background:#d4edda;border-radius:6px;border-left:4px solid #28a745;}
+#result a{color:#155724;font-weight:bold;font-size:16px;}
+</style>
 </head>
 <body>
-    <h1>Lightning Warehouse Calculator</h1>
-    <p>Upload 4 Excel files. Auto pivot + VLOOKUP + smart fill.</p>
-    <p><small>文件在服务器上临时处理，处理完成后自动删除。</small></p>
+<h1>闪电仓计算工具</h1>
+<div class="box">
+<form id="uploadForm" enctype="multipart/form-data" method="POST" action="/process">
+<div class="row">
+<label>1. 闪电仓计算模板 <span class="req">(必填)</span></label>
+<input type="file" name="file1" accept=".xlsx,.xls,.xlsm" required>
+<span class="name" id="s1"></span>
+</div>
+<div class="row">
+<label>2. 全店数据-门店成交明细 <span class="req">(必填)</span></label>
+<input type="file" name="file2" accept=".xlsx,.xls,.xlsm,.csv" required>
+<span class="name" id="s2"></span>
+</div>
+<div class="row">
+<label>3. 评价分析明细 <span class="opt">(可选)</span></label>
+<input type="file" name="file3" accept=".xlsx,.xls,.xlsm,.csv">
+<span class="name" id="s3"></span>
+</div>
+<div class="row">
+<label>4. 门店推广费 <span class="opt">(可选)</span></label>
+<input type="file" name="file4" accept=".xlsx,.xls,.xlsm,.csv">
+<span class="name" id="s4"></span>
+</div>
+<div class="cfg" style="background:#f5f5f5;padding:16px;border-radius:8px;margin:20px 0;">
+<label>计算天数: <input type="number" name="days" value="30" min="1" max="365" required></label>
+<label>体验分参考: <input type="number" name="experience" value="80" min="0" max="100"></label>
+</div>
+<button type="submit" id="submitBtn">开始处理</button>
+</form>
+</div>
 
-    <form id="uploadForm" enctype="multipart/form-data">
-        <div class="file-row">
-            <label>1. 闪电仓计算模板 <span class="required">*</span></label>
-            <input type="file" name="file1" accept=".xlsx,.xls,.xlsm" required>
-            <span class="status" id="s1"></span>
-        </div>
-        <div class="file-row">
-            <label>2. 全店数据-门店成交明细 <span class="required">*</span></label>
-            <input type="file" name="file2" accept=".xlsx,.xls,.xlsm,.csv" required>
-            <span class="status" id="s2"></span>
-        </div>
-        <div class="file-row">
-            <label>3. 评价分析明细 <span class="optional">(可选)</span></label>
-            <input type="file" name="file3" accept=".xlsx,.xls,.xlsm,.csv">
-            <span class="status" id="s3"></span>
-        </div>
-        <div class="file-row">
-            <label>4. 门店推广费 <span class="optional">(可选)</span></label>
-            <input type="file" name="file4" accept=".xlsx,.xls,.xlsm,.csv">
-            <span class="status" id="s4"></span>
-        </div>
+<h3>处理日志</h3>
+<div class="box">
+<div id="log">等待开始...</div>
+</div>
 
-        <div class="config">
-            <label>计算天数: <input type="number" name="days" value="30" min="1" max="365" required></label>
-            &nbsp;&nbsp;
-            <label>体验分参考: <input type="number" name="experience" value="80" step="1" min="0" max="100"></label>
-        </div>
+<div id="result">
+<strong>处理完成!</strong> <a id="downloadBtn" href="#" download>下载结果文件</a>
+</div>
 
-        <button type="submit" id="submitBtn">Start Processing</button>
-    </form>
+<script>
+(function(){
+  function $(id){return document.getElementById(id);}
 
-    <h3>Processing Log</h3>
-    <div id="log">Waiting...</div>
+  // 选中文件后显示文件名
+  var files=document.querySelectorAll('input[type=file]');
+  for(var i=0;i<files.length;i++){
+    (function(inp,idx){
+      inp.addEventListener('change',function(){
+        var f=inp.files[0];
+        $('s'+(idx+1)).textContent=f?('已选择: '+f.name):'';
+      });
+    })(files[i],i);
+  }
 
-    <div id="result" style="display:none; margin-top: 20px;">
-        <h3>Done</h3>
-        <a id="downloadBtn" href="#" download style="background:#27ae60;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;">Download Result</a>
-    </div>
+  var form=$('uploadForm');
+  var btn=$('submitBtn');
+  var log=$('log');
+  var result=$('result');
 
-    <script>
-        // 显示文件名（纯 ASCII 版本，避免编码问题）
-        function bindFileShow() {
-            var inputs = document.querySelectorAll('input[type=file]');
-            for (var i = 0; i < inputs.length; i++) {
-                (function(inp, idx) {
-                    inp.addEventListener('change', function(e) {
-                        var f = e.target.files[0];
-                        var span = document.getElementById('s' + (idx + 1));
-                        if (f) {
-                            span.textContent = 'OK: ' + f.name;
-                            span.style.display = 'inline';
-                            span.style.color = '#27ae60';
-                        } else {
-                            span.textContent = '';
-                            span.style.display = 'none';
-                        }
-                    });
-                })(inputs[i], i);
-            }
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    btn.disabled=true;
+    btn.textContent='处理中...';
+    log.textContent='正在上传文件,请稍候...';
+    result.style.display='none';
+
+    var fd=new FormData(form);
+
+    fetch('/process',{method:'POST',body:fd})
+      .then(function(r){return r.json();})
+      .then(function(data){
+        if(data.task_id){
+          pollLog(data.task_id);
+        }else{
+          log.textContent='错误: '+(data.error||'未知错误');
+          btn.disabled=false;
+          btn.textContent='开始处理';
         }
+      })
+      .catch(function(err){
+        log.textContent='网络错误: '+err.message;
+        btn.disabled=false;
+        btn.textContent='开始处理';
+      });
+  });
 
-        function startPoll(taskId) {
-            var log = document.getElementById('log');
-            var result = document.getElementById('result');
-            var btn = document.getElementById('submitBtn');
-            var timer = setInterval(function() {
-                fetch('/status/' + taskId).then(function(r) { return r.json(); }).then(function(d) {
-                    log.textContent = d.log || '';
-                    log.scrollTop = log.scrollHeight;
-                    if (d.status === 'done') {
-                        clearInterval(timer);
-                        btn.disabled = false;
-                        btn.textContent = 'Start Processing';
-                        result.style.display = 'block';
-                        document.getElementById('downloadBtn').href = '/download/' + taskId;
-                    } else if (d.status === 'error') {
-                        clearInterval(timer);
-                        btn.disabled = false;
-                        btn.textContent = 'Start Processing';
-                        log.textContent = log.textContent + '\n\nERROR: ' + d.error;
-                    }
-                }).catch(function(e) {});
-            }, 1000);
-        }
-
-        function initForm() {
-            bindFileShow();
-            var form = document.getElementById('uploadForm');
-            var btn = document.getElementById('submitBtn');
-            var log = document.getElementById('log');
-            var result = document.getElementById('result');
-
-            form.addEventListener('submit', function(e) {
-                e.preventDefault();
-                btn.disabled = true;
-                btn.textContent = 'Processing...';
-                log.textContent = 'Uploading...';
-                result.style.display = 'none';
-
-                var formData = new FormData(form);
-
-                fetch('/process', { method: 'POST', body: formData })
-                    .then(function(r) { return r.json(); })
-                    .then(function(data) {
-                        if (data.task_id) {
-                            startPoll(data.task_id);
-                        } else {
-                            log.textContent = 'Error: ' + (data.error || 'Unknown');
-                            btn.disabled = false;
-                            btn.textContent = 'Start Processing';
-                        }
-                    })
-                    .catch(function(err) {
-                        log.textContent = 'Network Error: ' + err.message;
-                        btn.disabled = false;
-                        btn.textContent = 'Start Processing';
-                    });
-            });
-        }
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initForm);
-        } else {
-            initForm();
-        }
-    </script>
+  function pollLog(tid){
+    var t=setInterval(function(){
+      fetch('/status/'+tid)
+        .then(function(r){return r.json();})
+        .then(function(d){
+          log.textContent=d.log||'';
+          log.scrollTop=log.scrollHeight;
+          if(d.status==='done'){
+            clearInterval(t);
+            btn.disabled=false;
+            btn.textContent='开始处理';
+            result.style.display='block';
+            $('downloadBtn').href='/download/'+tid;
+          }else if(d.status==='error'){
+            clearInterval(t);
+            btn.disabled=false;
+            btn.textContent='开始处理';
+            log.textContent=log.textContent+'\n\n[错误] '+d.error;
+          }
+        })
+        .catch(function(e){});
+    },1000);
+  }
+})();
+</script>
 </body>
 </html>
 """
