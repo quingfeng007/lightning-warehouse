@@ -63,7 +63,7 @@ INDEX_HTML = """
         .file-row { display: flex; align-items: center; margin: 12px 0; }
         .file-row label { width: 200px; font-weight: bold; }
         .file-row input[type=file] { flex: 1; }
-        .file-row .status { width: 80px; color: #888; margin-left: 8px; }
+        .file-row .status { width: 220px; color: #888; margin-left: 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: none; }
         .config { background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 20px 0; }
         .config input { width: 100px; padding: 6px; }
         button { background: #3498db; color: white; border: none; padding: 12px 32px; font-size: 16px; border-radius: 6px; cursor: pointer; }
@@ -123,7 +123,14 @@ INDEX_HTML = """
         ['file1','file2','file3','file4'].forEach((name, i) => {
             document.querySelector(`input[name="${name}"]`).addEventListener('change', e => {
                 const f = e.target.files[0];
-                document.getElementById('s' + (i+1)).textContent = f ? '✓ ' + f.name : '';
+                const span = document.getElementById('s' + (i+1));
+                if (f) {
+                    span.textContent = '✓ ' + f.name;
+                    span.style.display = 'inline';
+                } else {
+                    span.textContent = '';
+                    span.style.display = 'none';
+                }
             });
         });
 
