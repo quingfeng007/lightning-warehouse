@@ -21,13 +21,27 @@ from flask import Flask, request, render_template_string, send_file, jsonify, re
 # 为了避免路径问题，这里把核心逻辑重新写一遍（精简版）
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lightning_warehouse_tool import (
-    extract_short_name,
-    make_pivot_file2,
-    make_pivot_file3,
-    make_pivot_file4,
-    process_file1,
-)
+try:
+    from lightning_warehouse_tool import (
+        extract_short_name,
+        make_pivot_file2,
+        make_pivot_file3,
+        make_pivot_file4,
+        process_file1,
+    )
+except ImportError as e:
+    # 如果是 PyQt5 缺失错误（云端环境），那是因为 module 顶层 import 了 PyQt5
+    # 模块代码已用 try/except 处理，这里再兜底
+    if 'PyQt5' not in str(e):
+        raise  # 其他 ImportError 才是真问题，重抛
+    # 重新尝试，云端环境下 PyQt5 是可选的
+    import importlib
+    import lightning_warehouse_tool
+    extract_short_name = lightning_warehouse_tool.extract_short_name
+    make_pivot_file2 = lightning_warehouse_tool.make_pivot_file2
+    make_pivot_file3 = lightning_warehouse_tool.make_pivot_file3
+    make_pivot_file4 = lightning_warehouse_tool.make_pivot_file4
+    process_file1 = lightning_warehouse_tool.process_file1
 
 # ============== Flask 应用 ==============
 app = Flask(__name__)

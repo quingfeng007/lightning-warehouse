@@ -13,13 +13,28 @@ import pandas as pd
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QFileDialog,
-    QTextEdit, QMessageBox, QGroupBox, QGridLayout
-)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
+
+# PyQt5 是桌面 GUI 用的，Web 部署时不需要
+# 包装为可选 import：本地桌面跑用 PyQt5，Render/云端跑会自动跳过
+try:
+    from PyQt5.QtWidgets import (
+        QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QLineEdit, QFileDialog,
+        QTextEdit, QMessageBox, QGroupBox, QGridLayout
+    )
+    from PyQt5.QtCore import Qt, QThread, pyqtSignal
+    from PyQt5.QtGui import QFont
+    _HAS_PYQT5 = True
+except ImportError:
+    _HAS_PYQT5 = False  # 云端/无 GUI 环境：纯函数仍可使用
+    # 下面的 class 定义（如 Worker(QThread)、MainWindow(QWidget)）需要这些名字
+    # 在云端环境不会出现它们被实例化，仅定义不能崩——给个占位
+    class _Placeholder:
+        def __init__(self, *a, **kw): pass
+    QApplication = QWidget = QVBoxLayout = QHBoxLayout = _Placeholder
+    QPushButton = QLabel = QLineEdit = QFileDialog = _Placeholder
+    QTextEdit = QMessageBox = QGroupBox = QGridLayout = _Placeholder
+    QThread = Qt = pyqtSignal = QFont = _Placeholder
 
 
 # ============ 核心处理逻辑 ============
