@@ -56,7 +56,7 @@ INDEX_HTML = """
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>闪电仓计算工具 - Web 版</title>
+    <title>Lightning Warehouse Calculator - Web</title>
     <style>
         body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
         h1 { color: #2c3e50; }
@@ -75,8 +75,8 @@ INDEX_HTML = """
     </style>
 </head>
 <body>
-    <h1>⚡ 闪电仓计算工具</h1>
-    <p>上传 4 个 Excel 文件，自动完成透视 + VLOOKUP + 智能填充。</p>
+    <h1>Lightning Warehouse Calculator</h1>
+    <p>Upload 4 Excel files. Auto pivot + VLOOKUP + smart fill.</p>
     <p><small>文件在服务器上临时处理，处理完成后自动删除。</small></p>
 
     <form id="uploadForm" enctype="multipart/form-data">
@@ -107,90 +107,102 @@ INDEX_HTML = """
             <label>体验分参考: <input type="number" name="experience" value="80" step="1" min="0" max="100"></label>
         </div>
 
-        <button type="submit" id="submitBtn">🚀 开始处理</button>
+        <button type="submit" id="submitBtn">Start Processing</button>
     </form>
 
-    <h3>📋 处理日志</h3>
-    <div id="log">等待开始...</div>
+    <h3>Processing Log</h3>
+    <div id="log">Waiting...</div>
 
     <div id="result" style="display:none; margin-top: 20px;">
-        <h3>✅ 处理完成</h3>
-        <a id="downloadBtn" href="#" download style="background:#27ae60;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;">📥 下载结果文件</a>
+        <h3>Done</h3>
+        <a id="downloadBtn" href="#" download style="background:#27ae60;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;">Download Result</a>
     </div>
 
     <script>
-        // 显示文件名
-        ['file1','file2','file3','file4'].forEach((name, i) => {
-            document.querySelector(`input[name="${name}"]`).addEventListener('change', e => {
-                const f = e.target.files[0];
-                const span = document.getElementById('s' + (i+1));
-                if (f) {
-                    span.textContent = '✓ ' + f.name;
-                    span.style.display = 'inline';
-                } else {
-                    span.textContent = '';
-                    span.style.display = 'none';
-                }
-            });
-        });
-
-        // 提交表单（SSE 流式日志）
-        document.getElementById('uploadForm').onsubmit = async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('submitBtn');
-            const log = document.getElementById('log');
-            const result = document.getElementById('result');
-
-            btn.disabled = true;
-            btn.textContent = '⏳ 处理中...';
-            log.textContent = '';
-            result.style.display = 'none';
-
-            const formData = new FormData(e.target);
-
-            // 改用普通 POST + 轮询，兼容性更好
-            try {
-                const resp = await fetch('/process', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (data.task_id) {
-                    pollLog(data.task_id);
-                } else {
-                    log.textContent = '错误: ' + (data.error || '未知');
-                    btn.disabled = false;
-                    btn.textContent = '🚀 开始处理';
-                }
-            } catch (err) {
-                log.textContent = '网络错误: ' + err.message;
-                btn.disabled = false;
-                btn.textContent = '🚀 开始处理';
+        // 显示文件名（纯 ASCII 版本，避免编码问题）
+        function bindFileShow() {
+            var inputs = document.querySelectorAll('input[type=file]');
+            for (var i = 0; i < inputs.length; i++) {
+                (function(inp, idx) {
+                    inp.addEventListener('change', function(e) {
+                        var f = e.target.files[0];
+                        var span = document.getElementById('s' + (idx + 1));
+                        if (f) {
+                            span.textContent = 'OK: ' + f.name;
+                            span.style.display = 'inline';
+                            span.style.color = '#27ae60';
+                        } else {
+                            span.textContent = '';
+                            span.style.display = 'none';
+                        }
+                    });
+                })(inputs[i], i);
             }
-        };
+        }
 
-        async function pollLog(taskId) {
-            const log = document.getElementById('log');
-            const result = document.getElementById('result');
-            const btn = document.getElementById('submitBtn');
-
-            const interval = setInterval(async () => {
-                try {
-                    const r = await fetch('/status/' + taskId);
-                    const d = await r.json();
+        function startPoll(taskId) {
+            var log = document.getElementById('log');
+            var result = document.getElementById('result');
+            var btn = document.getElementById('submitBtn');
+            var timer = setInterval(function() {
+                fetch('/status/' + taskId).then(function(r) { return r.json(); }).then(function(d) {
                     log.textContent = d.log || '';
                     log.scrollTop = log.scrollHeight;
                     if (d.status === 'done') {
-                        clearInterval(interval);
+                        clearInterval(timer);
                         btn.disabled = false;
-                        btn.textContent = '🚀 开始处理';
+                        btn.textContent = 'Start Processing';
                         result.style.display = 'block';
                         document.getElementById('downloadBtn').href = '/download/' + taskId;
                     } else if (d.status === 'error') {
-                        clearInterval(interval);
+                        clearInterval(timer);
                         btn.disabled = false;
-                        btn.textContent = '🚀 开始处理';
-                        log.textContent += '\n\n❌ 错误: ' + d.error;
+                        btn.textContent = 'Start Processing';
+                        log.textContent = log.textContent + '\n\nERROR: ' + d.error;
                     }
-                } catch (e) {}
+                }).catch(function(e) {});
             }, 1000);
+        }
+
+        function initForm() {
+            bindFileShow();
+            var form = document.getElementById('uploadForm');
+            var btn = document.getElementById('submitBtn');
+            var log = document.getElementById('log');
+            var result = document.getElementById('result');
+
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                btn.disabled = true;
+                btn.textContent = 'Processing...';
+                log.textContent = 'Uploading...';
+                result.style.display = 'none';
+
+                var formData = new FormData(form);
+
+                fetch('/process', { method: 'POST', body: formData })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.task_id) {
+                            startPoll(data.task_id);
+                        } else {
+                            log.textContent = 'Error: ' + (data.error || 'Unknown');
+                            btn.disabled = false;
+                            btn.textContent = 'Start Processing';
+                        }
+                    })
+                    .catch(function(err) {
+                        log.textContent = 'Network Error: ' + err.message;
+                        btn.disabled = false;
+                        btn.textContent = 'Start Processing';
+                    });
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initForm);
+        } else {
+            initForm();
         }
     </script>
 </body>
