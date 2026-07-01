@@ -191,7 +191,7 @@ button:disabled{background:#95a5a6;cursor:not-allowed;}
 
     var fd=new FormData(form);
 
-    fetch('/process',{method:'POST',body:fd})
+    fetch('/process',{method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest','Accept':'application/json'}})
       .then(function(r){return r.json();})
       .then(function(data){
         if(data.task_id){
@@ -248,15 +248,98 @@ def index():
 def health():
     return jsonify(status='ok', version='1.0')
 
+RESULT_HTML = u"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>处理结果 - 闪电仓计算工具</title>
+<style>
+body{font-family:-apple-system,"Microsoft YaHei",sans-serif;max-width:760px;margin:30px auto;padding:0 20px;background:#f9f9f9;}
+h1{color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:10px;}
+.box{background:white;padding:20px;border-radius:8px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+#log{background:#2c3e50;color:#ecf0f1;padding:16px;border-radius:6px;font-family:Menlo,Consolas,monospace;min-height:300px;max-height:500px;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;}
+#result{display:none;margin-top:16px;padding:20px;background:#d4edda;border-radius:6px;border-left:4px solid #28a745;text-align:center;}
+#result a{color:#155724;font-weight:bold;font-size:18px;display:inline-block;margin-top:10px;padding:12px 24px;background:#28a745;color:white;text-decoration:none;border-radius:6px;}
+#result a:hover{background:#218838;}
+.btn-home{display:inline-block;margin-top:10px;padding:8px 16px;background:#6c757d;color:white;text-decoration:none;border-radius:4px;font-size:14px;}
+.btn-home:hover{background:#5a6268;}
+.status{padding:12px;border-radius:6px;margin:10px 0;font-weight:bold;}
+.status.running{background:#fff3cd;color:#856404;border-left:4px solid #ffc107;}
+.status.done{background:#d4edda;color:#155724;border-left:4px solid #28a745;}
+.status.error{background:#f8d7da;color:#721c24;border-left:4px solid #dc3545;}
+</style>
+</head>
+<body>
+<h1>闪电仓计算 - 处理结果</h1>
+<div class="box">
+<div id="statusBox" class="status running">处理中...</div>
+<h3>处理日志</h3>
+<div id="log">初始化...</div>
+<div id="result">
+<strong>处理完成!</strong><br>
+<a id="downloadBtn" href="#" download>下载结果文件</a>
+<br>
+<a class="btn-home" href="/">返回处理新文件</a>
+</div>
+</div>
+
+<script>
+(function(){
+  var taskId='__TASK_ID__';
+  var log=document.getElementById('log');
+  var statusBox=document.getElementById('statusBox');
+  var result=document.getElementById('result');
+
+  var t=setInterval(function(){
+    fetch('/status/'+taskId)
+      .then(function(r){return r.json();})
+      .then(function(d){
+        log.textContent=d.log||'';
+        log.scrollTop=log.scrollHeight;
+        if(d.status==='done'){
+          clearInterval(t);
+          statusBox.className='status done';
+          statusBox.textContent='处理完成!';
+          result.style.display='block';
+          document.getElementById('downloadBtn').href='/download/'+taskId;
+        }else if(d.status==='error'){
+          clearInterval(t);
+          statusBox.className='status error';
+          statusBox.textContent='处理失败';
+          log.textContent=log.textContent+'\\n\\n[错误] '+d.error;
+        }
+      })
+      .catch(function(e){
+        log.textContent=log.textContent+'\\n[网络错误] '+e.message;
+      });
+  },1000);
+})();
+</script>
+</body>
+</html>
+"""
+
+
 @app.route('/process', methods=['POST'])
 def process():
-    """接收文件，启动后台处理"""
+    """接收文件，启动后台处理。
+    - 如果是 fetch/AJAX(X-Requested-With 或 Accept: application/json),返回 JSON
+    - 如果是浏览器原生表单提交,返回 HTML 页面(含自动轮询 JS)
+    """
     # 检查必填
-    for name in ('file1', 'file2', 'days'):
-        if name not in request.files and name != 'days':
-            return jsonify(error=f'缺少文件: {name}'), 400
+    is_ajax_check = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    if 'file1' not in request.files:
+        if is_ajax_check:
+            return jsonify(error='缺少文件: file1'), 400
+        return '<h1>错误</h1><p>缺少文件 file1</p>', 400
+    if 'file2' not in request.files:
+        if is_ajax_check:
+            return jsonify(error='缺少文件: file2'), 400
+        return '<h1>错误</h1><p>缺少文件 file2</p>', 400
     if 'days' not in request.form:
-        return jsonify(error='缺少计算天数'), 400
+        if is_ajax_check:
+            return jsonify(error='缺少计算天数'), 400
+        return '<h1>错误</h1><p>缺少计算天数</p>', 400
 
     days = int(request.form['days'])
     experience = int(request.form.get('experience', 80))
@@ -284,9 +367,68 @@ def process():
     # 初始化任务
     task_set(task_id, status='running', log='', work_dir=work_dir)
 
-    # 在后台线程处理
+    # 判断客户端类型
+    # 浏览器原生表单提交:无 X-Requested-With,Accept 为 */* 或 text/html
+    # fetch 提交:带 X-Requested-With: XMLHttpRequest
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    if is_ajax:
+        # fetch 路径:返回 JSON task_id,让前端轮询
+        # 把后台启动逻辑延后到 jsonify 之后(只让 ajax 路径走)
+        import threading
+        def run():
+            try:
+                log_lines = []
+                def log(msg):
+                    log_lines.append(msg)
+                    task_set(task_id, log='\n'.join(log_lines))
+
+                log(f'[1/4] 处理文件2: 全店数据-门店成交明细')
+                tmp2 = os.path.join(work_dir, '_pivot_file2.xlsx')
+                df2_stores = []
+                wb1 = load_workbook(file1_path, data_only=False)
+                ws1 = wb1.active
+                for row in ws1.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True):
+                    v = row[0]
+                    if v is not None and str(v).strip():
+                        df2_stores.append(str(v).strip())
+                log(f'  门店数: {len(df2_stores)}')
+                make_pivot_file2(file2_path, df2_stores, tmp2, log)
+                log(f'  透视完成: {tmp2}')
+
+                tmp3 = None
+                if file3_path:
+                    log(f'[2/4] 处理文件3: 评价分析明细')
+                    tmp3 = os.path.join(work_dir, '_pivot_file3.xlsx')
+                    make_pivot_file3(file3_path, df2_stores, tmp3, log)
+                    log(f'  透视完成: {tmp3}')
+
+                tmp4 = None
+                if file4_path:
+                    log(f'[3/4] 处理文件4: 门店推广费')
+                    tmp4 = os.path.join(work_dir, '_pivot_file4.xlsx')
+                    make_pivot_file4(file4_path, df2_stores, tmp4, log)
+                    log(f'  透视完成: {tmp4}')
+
+                log(f'[4/4] 生成最终结果到文件1')
+                output_path = os.path.join(work_dir, '闪电仓计算结果.xlsx')
+                process_file1(file1_path, days, tmp2, output_path, log,
+                              file3_vlookup_path=tmp3,
+                              file4_vlookup_path=tmp4)
+
+                log(f'Done: {output_path}')
+                task_set(task_id, status='done', _output=output_path)
+            except Exception as e:
+                import traceback
+                err_msg = str(e) + '\n' + traceback.format_exc()
+                log_lines.append(f'\nERROR: {err_msg}')
+                task_set(task_id, status='error', error=err_msg, log='\n'.join(log_lines))
+        threading.Thread(target=run, daemon=True).start()
+        return jsonify(task_id=task_id)
+
+    # 浏览器原生表单提交路径:启动后台处理 + 返回 HTML 页面(含自动轮询)
     import threading
-    def run():
+    def run_html():
         try:
             log_lines = []
             def log(msg):
@@ -333,10 +475,9 @@ def process():
             err_msg = str(e) + '\n' + traceback.format_exc()
             log_lines.append(f'\nERROR: {err_msg}')
             task_set(task_id, status='error', error=err_msg, log='\n'.join(log_lines))
+    threading.Thread(target=run_html, daemon=True).start()
+    return RESULT_HTML.replace('__TASK_ID__', task_id)
 
-    threading.Thread(target=run, daemon=True).start()
-
-    return jsonify(task_id=task_id)
 
 @app.route('/status/<task_id>')
 def status(task_id):
