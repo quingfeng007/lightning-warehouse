@@ -142,7 +142,6 @@ button{width:100%;padding:12px;margin-top:18px;background:#667eea;color:white;bo
 button:hover{background:#5568d3;}
 button:disabled{background:#999;cursor:not-allowed;}
 .err{color:#e74c3c;background:#fde8e8;padding:10px 14px;border-radius:6px;margin-top:14px;font-size:14px;display:none;}
-.tip{color:#888;font-size:12px;margin-top:18px;text-align:center;line-height:1.6;}
 </style>
 </head>
 <body>
@@ -156,7 +155,6 @@ button:disabled{background:#999;cursor:not-allowed;}
     <button type="submit" id="btn">登录</button>
     <div class="err" id="err"></div>
   </form>
-  <p class="tip">默认密码: <code>lightning</code><br>可在 Render 环境变量 <code>APP_PASSWORD</code> 中修改</p>
 </div>
 <script>
 (function(){
