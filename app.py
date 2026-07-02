@@ -48,6 +48,9 @@ except ImportError as e:
 # ============== Flask 应用 ==============
 app = Flask(__name__)
 _APP_START_TIME = time.time()
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.environ.get('FLASK_SECRET') or os.urandom(32)
+APP_PASSWORD = os.environ.get('APP_PASSWORD', 'lightning')
+LOCK_TIMEOUT = int(os.environ.get('LOCK_TIMEOUT', '300'))  # 5 分钟锁屏
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB 上限
 
 # 任务存储（用文件存储，以适配 gunicorn 多 worker 场景）
@@ -95,6 +98,103 @@ def task_get(task_id):
         return data
     except Exception:
         return None
+
+# ============== 鉴权 ==============
+from functools import wraps
+from flask import session, redirect, url_for, request
+
+def require_auth(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        if not session.get('authed'):
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or \
+               'application/json' in request.headers.get('Accept', ''):
+                return jsonify(error='未授权,请重新登录', need_login=True), 401
+            return redirect(url_for('login', next=request.path))
+        # session 过期: 同时检查时间戳
+        last = session.get('last_active', 0)
+        if time.time() - last > LOCK_TIMEOUT:
+            session.clear()
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or \
+               'application/json' in request.headers.get('Accept', ''):
+                return jsonify(error='会话已过期,请重新登录', need_login=True), 401
+            return redirect(url_for('login', next=request.path, expired=1))
+        # 刷新 last_active
+        session['last_active'] = time.time()
+        return f(*args, **kwargs)
+    return wrapped
+
+# ============== 登录页 ==============
+LOGIN_HTML = u'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>登录 - 闪电仓计算工具</title>
+<style>
+body{font-family:-apple-system,"Microsoft YaHei",sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0;padding:20px;}
+.box{background:white;padding:40px 36px;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.2);width:100%;max-width:380px;box-sizing:border-box;}
+h1{margin:0 0 8px;color:#2c3e50;font-size:24px;text-align:center;}
+p.sub{color:#888;margin:0 0 28px;font-size:13px;text-align:center;}
+label{display:block;color:#555;margin-bottom:6px;font-size:14px;}
+input[type=password]{width:100%;padding:12px 14px;border:1px solid #ddd;border-radius:6px;font-size:15px;box-sizing:border-box;outline:none;transition:border-color 0.2s;}
+input[type=password]:focus{border-color:#667eea;}
+button{width:100%;padding:12px;margin-top:18px;background:#667eea;color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;transition:background 0.2s;}
+button:hover{background:#5568d3;}
+button:disabled{background:#999;cursor:not-allowed;}
+.err{color:#e74c3c;background:#fde8e8;padding:10px 14px;border-radius:6px;margin-top:14px;font-size:14px;display:none;}
+.tip{color:#888;font-size:12px;margin-top:18px;text-align:center;line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>⚡ 闪电仓计算</h1>
+  <p class="sub">请输入访问密码</p>
+  <form method="post" action="/login" id="loginForm">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="pw">密码</label>
+    <input type="password" id="pw" name="password" autofocus required>
+    <button type="submit" id="btn">登录</button>
+    <div class="err" id="err"></div>
+  </form>
+  <p class="tip">默认密码: <code>lightning</code><br>可在 Render 环境变量 <code>APP_PASSWORD</code> 中修改</p>
+</div>
+<script>
+(function(){
+  var params = new URLSearchParams(location.search);
+  if (params.get('expired') === '1') {
+    var e = document.getElementById('err');
+    e.textContent = '会话已过期(5 分钟无操作),请重新登录';
+    e.style.display = 'block';
+  }
+  document.getElementById('loginForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var btn = document.getElementById('btn');
+    btn.disabled = true; btn.textContent = '验证中...';
+    var fd = new FormData(this);
+    fetch('/login', {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.ok) {
+          location.href = d.next || '/';
+        } else {
+          var e = document.getElementById('err');
+          e.textContent = d.error || '密码错误';
+          e.style.display = 'block';
+          btn.disabled = false; btn.textContent = '登录';
+          document.getElementById('pw').focus();
+        }
+      })
+      .catch(function(){
+        var e = document.getElementById('err');
+        e.textContent = '网络错误';
+        e.style.display = 'block';
+        btn.disabled = false; btn.textContent = '登录';
+      });
+  });
+})();
+</script>
+</body>
+</html>'''
 
 # ============== HTML 模板 ==============
 INDEX_HTML = u"""<!DOCTYPE html>
@@ -235,13 +335,96 @@ button:disabled{background:#95a5a6;cursor:not-allowed;}
   }
 })();
 </script>
+
+<script>
+// 5 分钟锁屏(不刷新也计时,刷新也重新计时)
+(function(){
+  var TIMEOUT_MS = 5 * 60 * 1000;
+  var warnTimer = null, lockTimer = null, heartbeatTimer = null, warned = false;
+
+  function lock(){
+    fetch('/logout', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .finally(function(){ location.href = '/login?expired=1'; });
+  }
+
+  function showWarn(){
+    if (document.getElementById('lockOverlay')) return;
+    var o = document.createElement('div');
+    o.id = 'lockOverlay';
+    o.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f39c12;color:white;padding:14px;text-align:center;z-index:99999;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,0.2);';
+    o.textContent = '\u26a0\ufe0f 30 秒后将自动锁定(5 分钟无操作),点任意位置可继续使用';
+    document.body.appendChild(o);
+  }
+
+  function reset(){
+    var o = document.getElementById('lockOverlay');
+    if (o) o.remove();
+    warned = false;
+    clearTimeout(warnTimer);
+    clearTimeout(lockTimer);
+    warnTimer = setTimeout(function(){ warned = true; showWarn(); }, TIMEOUT_MS - 30000);
+    lockTimer = setTimeout(lock, TIMEOUT_MS);
+  }
+
+  // 心跳:每 1 分钟 ping 一次,服务端 session 计时同步
+  setInterval(function(){
+    fetch('/heartbeat', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(function(r){ if (r.status === 401) lock(); return r.json(); })
+      .catch(function(){});
+  }, 60000);
+
+  ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function(ev){
+    document.addEventListener(ev, reset, {passive:true});
+  });
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden) reset();
+  });
+
+  reset();
+})();
+</script>
 </body>
 </html>
 """
 
 # ============== 路由 ==============
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        pw = request.form.get('password', '')
+        next_url = request.form.get('next') or '/'
+        if pw == APP_PASSWORD:
+            session['authed'] = True
+            session['last_active'] = time.time()
+            session.permanent = False
+            is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            if is_ajax:
+                return jsonify(ok=True, next=next_url)
+            return redirect(next_url)
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+        if is_ajax:
+            return jsonify(ok=False, error='密码错误')
+        return render_template_string(LOGIN_HTML, next=next_url), 401
+    # GET
+    return render_template_string(LOGIN_HTML, next=request.args.get('next', '/'))
+
+@app.route('/logout', methods=['POST', 'GET'])
+def logout():
+    session.clear()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or \
+       'application/json' in request.headers.get('Accept', ''):
+        return jsonify(ok=True)
+    return redirect(url_for('login'))
+
+# 心跳: 客户端定时调用，刷新 last_active
+@app.route('/heartbeat', methods=['POST'])
+@require_auth
+def heartbeat():
+    return jsonify(ok=True, last_active=session.get('last_active'))
+
 @app.route('/')
+@require_auth
 def index():
     return render_template_string(INDEX_HTML)
 
@@ -327,12 +510,60 @@ h1{color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:10px;}
   },1000);
 })();
 </script>
+
+<script>
+// 5 分钟锁屏(同主页逻辑)
+(function(){
+  var TIMEOUT_MS = 5 * 60 * 1000;
+  var warnTimer = null, lockTimer = null, warned = false;
+
+  function lock(){
+    fetch('/logout', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .finally(function(){ location.href = '/login?expired=1'; });
+  }
+
+  function showWarn(){
+    if (document.getElementById('lockOverlay')) return;
+    var o = document.createElement('div');
+    o.id = 'lockOverlay';
+    o.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f39c12;color:white;padding:14px;text-align:center;z-index:99999;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,0.2);';
+    o.textContent = '\u26a0\ufe0f 30 秒后将自动锁定,点任意位置可继续使用';
+    document.body.appendChild(o);
+  }
+
+  function reset(){
+    var o = document.getElementById('lockOverlay');
+    if (o) o.remove();
+    warned = false;
+    clearTimeout(warnTimer);
+    clearTimeout(lockTimer);
+    warnTimer = setTimeout(function(){ warned = true; showWarn(); }, TIMEOUT_MS - 30000);
+    lockTimer = setTimeout(lock, TIMEOUT_MS);
+  }
+
+  setInterval(function(){
+    fetch('/heartbeat', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(function(r){ if (r.status === 401) lock(); return r.json(); })
+      .catch(function(){});
+  }, 60000);
+
+  ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function(ev){
+    document.addEventListener(ev, reset, {passive:true});
+  });
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden) reset();
+  });
+
+  reset();
+})();
+</script>
 </body>
 </html>
 """
 
 
 @app.route('/process', methods=['POST'])
+@require_auth
 def process():
     """接收文件，启动后台处理。
     - 如果是 fetch/AJAX(X-Requested-With 或 Accept: application/json),返回 JSON
@@ -492,6 +723,7 @@ def process():
 
 
 @app.route('/status/<task_id>')
+@require_auth
 def status(task_id):
     t = task_get(task_id)
     if not t:
@@ -499,6 +731,7 @@ def status(task_id):
     return jsonify(status=t.get('status', 'running'), log=t.get('log', ''), error=t.get('error'))
 
 @app.route('/download/<task_id>')
+@require_auth
 def download(task_id):
     t = task_get(task_id)
     if not t or t.get('status') != 'done':
