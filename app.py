@@ -13,6 +13,7 @@ import tempfile
 import logging
 import time
 import json
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill
@@ -52,6 +53,12 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.environ.get('FLASK_SEC
 APP_PASSWORD = os.environ.get('APP_PASSWORD', 'lightning')
 LOCK_TIMEOUT = int(os.environ.get('LOCK_TIMEOUT', '300'))  # 5 分钟锁屏
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB 上限
+
+# ============== 版本信息（每次发布时更新） ==============
+APP_VERSION = '1.2'
+APP_UPDATED = '2026-11-17 21:50'
+APP_RELEASE_NOTE = '新增：门店推广费支持新版"推广查询"导出（A=门店名称,E=推广费）免透视直读，老格式仍兼容'
+_CST = timezone(timedelta(hours=8))  # 北京时间
 
 # 任务存储（用文件存储，以适配 gunicorn 多 worker 场景）
 TASK_DIR = os.path.join(tempfile.gettempdir(), 'lightning_tasks')
@@ -218,6 +225,7 @@ button:disabled{background:#95a5a6;cursor:not-allowed;}
 .opt{color:#95a5a6;font-size:12px;}
 #result{display:none;margin-top:16px;padding:16px;background:#d4edda;border-radius:6px;border-left:4px solid #28a745;}
 #result a{color:#155724;font-weight:bold;font-size:16px;}
+.ver{color:#95a5a6;font-size:12px;margin-top:24px;text-align:center;line-height:1.8;}
 </style>
 </head>
 <body>
@@ -381,6 +389,8 @@ button:disabled{background:#95a5a6;cursor:not-allowed;}
   reset();
 })();
 </script>
+
+<div class="ver">⚡ 版本 v{{ version }} · 更新于 {{ updated }}<br>{{ note }}<br>服务实例启动于 {{ started }}（北京时间）</div>
 </body>
 </html>
 """
@@ -424,13 +434,23 @@ def heartbeat():
 @app.route('/')
 @require_auth
 def index():
-    return render_template_string(INDEX_HTML)
+    started = datetime.fromtimestamp(_APP_START_TIME, _CST).strftime('%Y-%m-%d %H:%M')
+    return render_template_string(
+        INDEX_HTML,
+        version=APP_VERSION,
+        updated=APP_UPDATED,
+        note=APP_RELEASE_NOTE,
+        started=started,
+    )
 
 @app.route('/health')
 def health():
     return jsonify(
         status='ok',
-        version='1.1',
+        version=APP_VERSION,
+        updated=APP_UPDATED,
+        note=APP_RELEASE_NOTE,
+        started=datetime.fromtimestamp(_APP_START_TIME, _CST).strftime('%Y-%m-%d %H:%M'),
         uptime=time.time() - _APP_START_TIME,
         timestamp=time.time(),
     )
