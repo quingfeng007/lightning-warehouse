@@ -430,7 +430,7 @@ def index():
 def health():
     return jsonify(
         status='ok',
-        version='1.0',
+        version='1.1',
         uptime=time.time() - _APP_START_TIME,
         timestamp=time.time(),
     )

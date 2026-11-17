@@ -399,9 +399,9 @@ def make_pivot_file3(file3_path: str, file1_stores: list, output_path: str, log_
     return output_path
 
 
-def make_pivot_file4(file4_path: str, file1_stores: list, output_path: str, log_func=None):
+def make_pivot_file4_raw(file4_path: str, file1_stores: list, output_path: str, log_func=None):
     """
-    处理文件4：门店推广费
+    处理文件4（老版明细格式）：门店推广费
     - 透视：D列=门店名称(计数), M列=推广消费实付(元)(求和)
     - 输出布局：D=门店名称, E=简称, F=推广费, G=门店, H=匹配_推广费
     """
@@ -504,6 +504,148 @@ def make_pivot_file4(file4_path: str, file1_stores: list, output_path: str, log_
     wb.save(output_path)
     log(f"[文件4] 已保存: {output_path}")
     return output_path
+
+
+def _looks_like_simple_promotion(file4_path: str) -> bool:
+    """
+    识别新版推广查询导出：首张工作表前 5 行内，A 列表头为'门店名称'，
+    且同一表头行中存在含'推广费'的表头（导出固定在 E 列）。
+    """
+    ext = os.path.splitext(file4_path)[1].lower()
+    if ext not in (".xlsx", ".xlsm"):
+        return False
+    wb = None
+    try:
+        wb = load_workbook(file4_path, data_only=True, read_only=True)
+        ws = wb.worksheets[0]
+        for row in ws.iter_rows(min_row=1, max_row=5, min_col=1, max_col=14, values_only=True):
+            a = row[0]
+            if isinstance(a, str) and "门店名称" in a.strip():
+                for v in row:
+                    if isinstance(v, str) and "推广费" in v:
+                        return True
+                return False
+        return False
+    except Exception:
+        return False
+    finally:
+        if wb is not None:
+            wb.close()
+
+
+def make_pivot_file4_simple(file4_path: str, file1_stores: list, output_path: str, log_func=None):
+    """
+    处理文件4（新版格式）：推广查询导出
+    - 首张工作表：A=门店名称，E=推广费（元），第 1 行为表头，数据每店一行（已按查询区间聚合）
+    - 不再做数据透视：直接按门店名称汇总（防重复行），按简称匹配模板门店
+    - 输出布局与老版一致：D=门店名称, E=简称, F=推广费, G=门店, H=匹配_推广费
+    """
+    log = log_func or (lambda msg: None)
+    log(f"[文件4-新版] 读取: {file4_path}")
+
+    raw = pd.read_excel(file4_path, sheet_name=0, header=None)
+    log(f"[文件4-新版] 原始数据形状: {raw.shape}")
+
+    # 定位表头行（A列含"门店名称"，最多扫描前 5 行）
+    header_row = None
+    for i in range(min(5, len(raw))):
+        v = raw.iat[i, 0]
+        if isinstance(v, str) and "门店名称" in v.strip():
+            header_row = i
+            break
+    if header_row is None:
+        raise ValueError("新版推广费文件中 A 列找不到'门店名称'表头")
+    header_vals = raw.iloc[header_row].tolist()
+
+    # 定位推广费列：优先 E 列（第 5 列），否则在表头行找包含"推广费"的第一列
+    fee_col_idx = None
+    if len(header_vals) > 4 and isinstance(header_vals[4], str) and "推广费" in header_vals[4]:
+        fee_col_idx = 4
+    else:
+        for j, v in enumerate(header_vals):
+            if isinstance(v, str) and "推广费" in v:
+                fee_col_idx = j
+                break
+    if fee_col_idx is None:
+        raise ValueError(f"新版推广费文件表头中找不到'推广费'列，表头: {header_vals}")
+    log(f"[文件4-新版] 表头行: 第 {header_row + 1} 行, 门店名称列: A, 推广费列: 第 {fee_col_idx + 1} 列 ({header_vals[fee_col_idx]})")
+
+    data = raw.iloc[header_row + 1:].reset_index(drop=True)
+    names = data[0].where(pd.notna(data[0]), "").astype(str).str.strip()
+    fees = pd.to_numeric(data[fee_col_idx], errors="coerce")
+    bad_fee = int(fees.isna().sum())
+    if bad_fee:
+        log(f"[文件4-新版] 注意: {bad_fee} 个费用单元格无法解析为数字，按 0 处理")
+    fees = fees.fillna(0.0)
+
+    frame = pd.DataFrame({"store": names, "fee": fees})
+    frame = frame[frame["store"].str.len() > 0]
+    if len(frame) == 0:
+        raise ValueError("新版推广费文件中没有读取到任何门店数据")
+    pivot = frame.groupby("store")["fee"].sum().reset_index()
+    log(f"[文件4-新版] 门店行数: {len(frame)}, 汇总后门店数: {len(pivot)}, 推广费合计: {pivot['fee'].sum():.2f}")
+
+    # ---- 输出布局与 make_pivot_file4_raw 完全一致 ----
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "透视结果"
+
+    headers = [
+        ("D", "门店名称"),
+        ("E", "简称"),
+        ("F", "推广费"),
+        ("G", "门店"),
+        ("H", "匹配_推广费"),
+    ]
+    for col, h in headers:
+        ws[f"{col}1"] = h
+        ws[f"{col}1"].font = Font(bold=True)
+        ws[f"{col}1"].fill = PatternFill("solid", fgColor="DDEBF7")
+
+    # 写入汇总数据
+    for i, row in pivot.iterrows():
+        r = i + 2
+        ws[f"D{r}"] = row["store"]
+        ws[f"E{r}"] = extract_short_name(row["store"])
+        ws[f"F{r}"] = float(row["fee"])
+
+    # G 列：贴门店名
+    for i, store in enumerate(file1_stores):
+        r = i + 2
+        ws[f"G{r}"] = store
+
+    # H 列：按 G 门店匹配 E 简称，直接填值
+    lookup = {}
+    for _, row in pivot.iterrows():
+        key = extract_short_name(row["store"])
+        lookup[key] = float(row["fee"])
+    for i, store in enumerate(file1_stores):
+        r = i + 2
+        ws[f"H{r}"] = lookup.get(store, 0.0)
+
+    # 列宽
+    ws.column_dimensions["D"].width = 35
+    ws.column_dimensions["E"].width = 15
+    for c in ["F", "G", "H"]:
+        ws.column_dimensions[c].width = 16
+
+    wb.save(output_path)
+    log(f"[文件4-新版] 已保存: {output_path}")
+    return output_path
+
+
+def make_pivot_file4(file4_path: str, file1_stores: list, output_path: str, log_func=None):
+    """
+    文件4入口：自动识别格式并分发。
+    - 新版推广查询导出（A=门店名称, E=推广费（元），免透视直接汇总匹配）
+    - 老版明细格式（自动走原有透视逻辑）
+    """
+    log = log_func or (lambda msg: None)
+    if _looks_like_simple_promotion(file4_path):
+        log("[文件4] 识别为新版推广费格式（A=门店名称, E=推广费（元）），直接汇总匹配")
+        return make_pivot_file4_simple(file4_path, file1_stores, output_path, log)
+    log("[文件4] 按老版明细格式处理（透视）")
+    return make_pivot_file4_raw(file4_path, file1_stores, output_path, log)
 
 
 def process_file1(file1_path: str, days: int, file2_vlookup_path: str, output_path: str,
